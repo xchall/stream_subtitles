@@ -8,7 +8,7 @@ import OnnxRuntimeBindings
 ///  * the LSTM state is carried from step to step,
 ///  * the encoder output (1 frame) is greedily decoded with at most 3 symbols per frame,
 ///  * pauses are decoded too: the model simply emits nothing while nobody talks.
-final class StreamingRNNT {
+final class StreamingRNNT: StreamingRecognizer {
     static let windowFrames = 9
     static let strideFrames = 4
     static let maxSymbolsPerFrame = 3

@@ -5,6 +5,10 @@ import Foundation
 /// The ONNX sessions live on a private serial queue: audio chunks are pushed from
 /// the microphone callback and the model runs there, so nothing blocks the UI and
 /// the sessions are only ever touched from one thread.
+///
+/// Only one language is kept in memory at a time: switching languages unloads the
+/// previous recognizer (its ONNX sessions are released on the inference queue)
+/// and loads the model for the new one.
 final class StreamingEngine: ObservableObject {
     enum State: Equatable {
         case idle
@@ -21,33 +25,69 @@ final class StreamingEngine: ObservableObject {
 
     private let queue = DispatchQueue(label: "com.dobriy.streamsubtitles.inference", qos: .userInitiated)
     private let audio = AudioInput()
-    private var recognizer: StreamingRNNT?
-    private var loaded = false
+    private var recognizer: StreamingRecognizer?
+
+    /// Incremented on every model load request; read on the main thread.
+    private var loadGeneration = 0
+    /// Mirrors `loadGeneration` on the inference queue, so a slow model load that
+    /// was superseded by a newer language selection can be discarded on arrival.
+    private var activeGeneration = 0
 
     // MARK: - Model
 
     func load() {
         guard case .idle = state else { return }
-        state = .loading
+        loadModel(for: language)
+    }
 
+    private func loadModel(for language: AppLanguage) {
+        loadGeneration += 1
+        let token = loadGeneration
+
+        guard language.hasModel else {
+            state = .ready
+            queue.async { [weak self] in
+                self?.unloadRecognizer()
+            }
+            return
+        }
+
+        state = .loading
         queue.async { [weak self] in
             guard let self else { return }
+            self.activeGeneration = token
+            self.unloadRecognizer()
+
             do {
-                let urls = try ModelLocator.urls(for: .english)
-                let recognizer = try StreamingRNNT(encoderURL: urls.encoder,
-                                                   decoderURL: urls.decoder,
-                                                   joinerURL: urls.joiner,
-                                                   tokensURL: urls.tokens)
+                // The big ONNX sessions are Objective-C objects; the pool makes
+                // sure the old graphs are really gone before the new one loads.
+                let recognizer = try autoreleasepool { try RecognizerFactory.make(for: language) }
+                guard self.activeGeneration == token else { return }
+
                 recognizer.onText = { [weak self] text in
-                    DispatchQueue.main.async { self?.transcript = text }
+                    DispatchQueue.main.async {
+                        guard let self, self.loadGeneration == token else { return }
+                        self.transcript = text
+                    }
                 }
                 self.recognizer = recognizer
-                self.loaded = true
-                DispatchQueue.main.async { self.state = .ready }
+
+                DispatchQueue.main.async {
+                    guard self.loadGeneration == token else { return }
+                    self.state = .ready
+                }
             } catch {
-                DispatchQueue.main.async { self.state = .failed(error.localizedDescription) }
+                DispatchQueue.main.async {
+                    guard self.loadGeneration == token else { return }
+                    self.state = .failed(error.localizedDescription)
+                }
             }
         }
+    }
+
+    /// Drops the current model; the ONNX Runtime sessions free their weights.
+    private func unloadRecognizer() {
+        recognizer = nil
     }
 
     // MARK: - Language
@@ -55,7 +95,10 @@ final class StreamingEngine: ObservableObject {
     func select(_ language: AppLanguage) {
         guard language != self.language else { return }
         if isListening { stopListening() }
+
         self.language = language
+        transcript = ""
+        loadModel(for: language)
     }
 
     // MARK: - Microphone
@@ -99,37 +142,80 @@ final class StreamingEngine: ObservableObject {
         audio.onSamples = nil
         isListening = false
         // Flush the last ~0.5 s of audio that is still sitting in the window buffer.
-        queue.async { self.recognizer?.flush() }
+        queue.async { self.recognizer?.flush(tailSeconds: 0.5) }
+    }
+}
+
+/// Builds the recognizer that matches the language's exported model family.
+enum RecognizerFactory {
+    static func make(for language: AppLanguage) throws -> StreamingRecognizer {
+        let files = try ModelLocator.files(for: language)
+        switch files.family {
+        case .icefall:
+            guard let tokens = files.tokens else {
+                throw NSError(domain: "RecognizerFactory", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Нет файла tokens.txt"])
+            }
+            return try StreamingRNNT(encoderURL: files.encoder,
+                                     decoderURL: files.decoder,
+                                     joinerURL: files.joiner,
+                                     tokensURL: tokens)
+        case .gigaam:
+            return try GigaamRNNT(encoderURL: files.encoder,
+                                  decoderURL: files.decoder,
+                                  jointURL: files.joiner)
+        }
     }
 }
 
 /// Finds the ONNX graphs and the token table inside the app bundle.
 enum ModelLocator {
-    struct URLs {
+    enum Family {
+        case icefall
+        case gigaam
+    }
+
+    struct Files {
+        let family: Family
         let encoder: URL
         let decoder: URL
         let joiner: URL
-        let tokens: URL
+        let tokens: URL?
     }
 
-    static func urls(for language: AppLanguage) throws -> URLs {
+    static func files(for language: AppLanguage) throws -> Files {
         guard language.hasModel else {
             throw NSError(domain: "ModelLocator", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Нет модели для этого языка"])
         }
-        return URLs(encoder: try find("encoder", "onnx"),
-                    decoder: try find("decoder", "onnx"),
-                    joiner: try find("joiner", "onnx"),
-                    tokens: try find("tokens", "txt"))
+
+        switch language {
+        case .english:
+            return Files(family: .icefall,
+                         encoder: try find("encoder", "onnx", for: language),
+                         decoder: try find("decoder", "onnx", for: language),
+                         joiner: try find("joiner", "onnx", for: language),
+                         tokens: try find("tokens", "txt", for: language))
+        case .russian:
+            return Files(family: .gigaam,
+                         encoder: try find("v3_rnnt_encoder", "onnx", for: language),
+                         decoder: try find("v3_rnnt_decoder", "onnx", for: language),
+                         joiner: try find("v3_rnnt_joint", "onnx", for: language),
+                         tokens: nil)
+        case .french, .spanish:
+            throw NSError(domain: "ModelLocator", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Нет модели для этого языка"])
+        }
     }
 
-    private static func find(_ name: String, _ ext: String) throws -> URL {
+    private static func find(_ name: String, _ ext: String, for language: AppLanguage) throws -> URL {
         let bundle = Bundle.main
+        let folder = language.modelFolder ?? language.rawValue
         let candidates: [URL?] = [
             bundle.url(forResource: name, withExtension: ext),
             bundle.url(forResource: name, withExtension: ext, subdirectory: "Models"),
-            bundle.url(forResource: name, withExtension: ext, subdirectory: "Models/en"),
-            bundle.url(forResource: name, withExtension: ext, subdirectory: "en")
+            bundle.url(forResource: name, withExtension: ext, subdirectory: "Models/\(folder)"),
+            bundle.url(forResource: name, withExtension: ext, subdirectory: folder)
         ]
         for case let url? in candidates where FileManager.default.fileExists(atPath: url.path) {
             return url

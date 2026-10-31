@@ -29,8 +29,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Only English ships with a model for now.
-    var hasModel: Bool { self == .english }
+    /// English ships the icefall model, Russian ships GigaAM v3 RNN-T.
+    var hasModel: Bool {
+        switch self {
+        case .english, .russian: return true
+        case .french, .spanish: return false
+        }
+    }
 
     /// Directory inside the app bundle that holds the ONNX graphs for this language.
     var modelFolder: String? { hasModel ? rawValue : nil }
