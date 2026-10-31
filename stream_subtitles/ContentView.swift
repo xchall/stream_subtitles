@@ -174,7 +174,7 @@ struct ContentView: View {
             return "Ошибка загрузки модели"
         case .ready:
             if !engine.language.hasModel {
-                return "Пока доступен только английский"
+                return "Модель для языка \(engine.language.title) пока недоступна"
             }
             return engine.isListening ? "Слушаю…" : "Нажмите, чтобы включить микрофон"
         }

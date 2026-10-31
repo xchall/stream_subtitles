@@ -1,10 +1,11 @@
 #if DEBUG
 import Foundation
 
-/// Tiny debug-only harness: launch the app with `--selftest <path-to-16k-wav>` and it
-/// decodes the file with the very same streaming loop the microphone uses.
+/// Tiny debug-only harness: launch the app with `--selftest <path-to-16k-wav>`
+/// and it decodes the file with the very same streaming loop the microphone uses.
 ///
 ///     xcrun simctl launch <device> com.dobriy.streamsubtitles --selftest /path/in/container.wav
+///     xcrun simctl launch <device> com.dobriy.streamsubtitles --selftest /path.wav --lang ru
 ///
 /// The transcript is written to `Documents/selftest.txt` and printed to the console.
 enum SelfTest {
@@ -23,17 +24,23 @@ enum SelfTest {
                 .appendingPathComponent("selftest.wav").path
         }
 
+        var language = AppLanguage.english
+        if let langIndex = args.firstIndex(of: "--lang"), langIndex + 1 < args.count,
+           let selected = AppLanguage(rawValue: args[langIndex + 1]) {
+            language = selected
+        }
+
         await Task.detached(priority: .userInitiated) {
             do {
                 let started = Date()
-                let urls = try ModelLocator.urls(for: .english)
-                let recognizer = try StreamingRNNT(encoderURL: urls.encoder,
-                                                   decoderURL: urls.decoder,
-                                                   joinerURL: urls.joiner,
-                                                   tokensURL: urls.tokens)
-                NSLog("SELFTEST model loaded in \(Date().timeIntervalSince(started))s")
+                let recognizer = try RecognizerFactory.make(for: language)
+                NSLog("SELFTEST [%@] model loaded in %.2fs",
+                      language.rawValue, Date().timeIntervalSince(started))
 
                 let samples = try WavFile.load(path: URL(fileURLWithPath: path))
+                let audioSeconds = Double(samples.count) / 16000.0
+
+                let inferenceStarted = Date()
                 let block = 320  // 20 ms
                 var offset = 0
                 while offset < samples.count {
@@ -41,15 +48,18 @@ enum SelfTest {
                     recognizer.accept(Array(samples[offset..<end]))
                     offset = end
                 }
-                recognizer.flush()
+                recognizer.flush(tailSeconds: 0.5)
+                let elapsed = Date().timeIntervalSince(inferenceStarted)
 
                 let text = recognizer.text
-                let line = "SELFTEST RESULT: \(text)\n"
+                let stats = String(format: "audio %.2fs, inference %.2fs, RTF %.2f",
+                                   audioSeconds, elapsed, elapsed / max(audioSeconds, 0.001))
+                let line = "SELFTEST RESULT [\(language.rawValue)]: \(text)\nSELFTEST STATS: \(stats)\n"
                 NSLog("%@", line)
                 let out = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("selftest.txt")
                 try? line.write(to: out, atomically: true, encoding: .utf8)
-                NSLog("SELFTEST done in \(Date().timeIntervalSince(started))s")
+                NSLog("SELFTEST done in %.2fs", Date().timeIntervalSince(started))
             } catch {
                 NSLog("SELFTEST FAILED: \(error)")
             }
