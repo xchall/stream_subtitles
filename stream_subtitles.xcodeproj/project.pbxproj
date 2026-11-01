@@ -8,10 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		AA00000000000000000001A1 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000002A1 /* onnxruntime */; };
+		AA00000000000000000013A1 /* espeakng.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000000000000000014A1 /* espeakng.xcframework */; };
+		AA00000000000000000015A1 /* espeak-ng-data in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000016A1 /* espeak-ng-data */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AA00000000000000000003A1 /* stream_subtitles.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = stream_subtitles.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000014A1 /* espeakng.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = espeakng.xcframework; path = Vendor/espeak/espeakng.xcframework; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000016A1 /* espeak-ng-data */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "espeak-ng-data"; path = "Vendor/espeak/espeak-ng-data"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -24,6 +28,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA00000000000000000001A1 /* onnxruntime in Frameworks */,
+				AA00000000000000000013A1 /* espeakng.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -34,8 +39,18 @@
 			isa = PBXGroup;
 			children = (
 				AA00000000000000000004A1 /* stream_subtitles */,
+				AA00000000000000000017A1 /* Vendor */,
 				AA00000000000000000007A1 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		AA00000000000000000017A1 /* Vendor */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000014A1 /* espeakng.xcframework */,
+				AA00000000000000000016A1 /* espeak-ng-data */,
+			);
+			name = Vendor;
 			sourceTree = "<group>";
 		};
 		AA00000000000000000007A1 /* Products */ = {
@@ -114,6 +129,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA00000000000000000015A1 /* espeak-ng-data in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -260,6 +276,10 @@
 				DEVELOPMENT_TEAM = DKQVBG5DGX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Vendor/espeak/include",
+				);
 				INFOPLIST_KEY_CFBundleDisplayName = "Stream Subtitles";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для распознавания речи в реальном времени.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -277,6 +297,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "stream_subtitles/stream_subtitles-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -293,6 +314,10 @@
 				DEVELOPMENT_TEAM = DKQVBG5DGX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Vendor/espeak/include",
+				);
 				INFOPLIST_KEY_CFBundleDisplayName = "Stream Subtitles";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для распознавания речи в реальном времени.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -310,6 +335,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "stream_subtitles/stream_subtitles-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

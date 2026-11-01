@@ -13,7 +13,19 @@ enum SelfTest {
         ProcessInfo.processInfo.arguments.contains("--selftest")
     }
 
+    /// `--tts "text"` synthesises one phrase, `--tts-verify` transcribes it back
+    /// with the ASR model, `--tts-stream` feeds a live transcript word by word.
+    static var isTTSRequested: Bool {
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("--tts") || args.contains("--tts-stream")
+    }
+
     static func runIfRequested() async {
+        if isRequested { await runRecognizerTest() }
+        if isTTSRequested { await runTTS() }
+    }
+
+    private static func runRecognizerTest() async {
         guard isRequested else { return }
 
         let args = ProcessInfo.processInfo.arguments
@@ -64,6 +76,116 @@ enum SelfTest {
                 NSLog("SELFTEST FAILED: \(error)")
             }
         }.value
+    }
+
+    // MARK: - TTS harness
+
+    private static var documents: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
+    private static func runTTS() async {
+        let args = ProcessInfo.processInfo.arguments
+
+        var language = AppLanguage.english
+        if let index = args.firstIndex(of: "--lang"), index + 1 < args.count,
+           let selected = AppLanguage(rawValue: args[index + 1]) {
+            language = selected
+        }
+
+        var text = "hello world one two three four five"
+        let textFlag = args.contains("--tts-stream") ? "--tts-stream" : "--tts"
+        if let index = args.firstIndex(of: textFlag), index + 1 < args.count,
+           !args[index + 1].hasPrefix("--") {
+            text = args[index + 1]
+        }
+
+        let streamed = args.contains("--tts-stream")
+        let verify = args.contains("--tts-verify")
+
+        await Task.detached(priority: .userInitiated) {
+            do {
+                if streamed {
+                    try await streamedTTS(text: text, language: language)
+                    return
+                }
+
+                let started = Date()
+                let tts = try PiperTTS.make(for: language)
+                let samples = try tts.synthesize(text: text)
+                let elapsed = Date().timeIntervalSince(started)
+                let seconds = Double(samples.count) / tts.sampleRate
+
+                NSLog("TTSRESULT [%@] %@ → %.2fs audio in %.2fs (RTF %.2f)",
+                      language.rawValue, text, seconds, elapsed,
+                      elapsed / max(seconds, 0.001))
+
+                let url = documents.appendingPathComponent("tts-\(language.rawValue).wav")
+                try WavFile.write(samples, sampleRate: tts.sampleRate, to: url)
+                NSLog("TTSWAV %@", url.path)
+
+                if verify {
+                    try await verifyTTS(samples, sampleRate: tts.sampleRate, language: language)
+                }
+            } catch {
+                NSLog("TTS FAILED: \(error)")
+            }
+        }.value
+    }
+
+    /// Simulates the live transcript: grows word by word, exactly like the
+    /// recogniser does, so the batching rule can be observed in the logs.
+    private static func streamedTTS(text: String, language: AppLanguage) async throws {
+        let speaker = StreamingSpeaker()
+        speaker.prepare(for: language)
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+
+        var transcript = ""
+        for word in text.split(whereSeparator: { $0.isWhitespace }) {
+            transcript += transcript.isEmpty ? String(word) : " " + word
+            speaker.accept(transcript)
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        // Let the silence timer close the phrase, the way a real pause does;
+        // `finish()` then only has to handle the (already empty) tail.
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        speaker.finish()
+        try await Task.sleep(nanoseconds: 10_000_000_000)
+        speaker.stop()
+    }
+
+    private static func verifyTTS(_ samples: [Float],
+                                  sampleRate: Double,
+                                  language: AppLanguage) async throws {
+        let recognizer = try RecognizerFactory.make(for: language)
+        let audio = resample(samples, from: sampleRate, to: 16000)
+
+        let block = 320  // 20 ms
+        var offset = 0
+        while offset < audio.count {
+            let end = min(offset + block, audio.count)
+            recognizer.accept(Array(audio[offset..<end]))
+            offset = end
+        }
+        recognizer.flush(tailSeconds: 0.5)
+        NSLog("TTSVERIFY [%@]: %@", language.rawValue, recognizer.text)
+    }
+
+    private static func resample(_ samples: [Float], from source: Double, to target: Double) -> [Float] {
+        guard source != target, !samples.isEmpty else { return samples }
+        let ratio = source / target
+        let count = Int(Double(samples.count) / ratio)
+        guard count > 0 else { return [] }
+
+        var result = [Float](repeating: 0, count: count)
+        for index in 0..<count {
+            let position = Double(index) * ratio
+            let low = min(Int(position), samples.count - 1)
+            let high = min(low + 1, samples.count - 1)
+            let fraction = Float(position - Double(low))
+            result[index] = samples[low] * (1 - fraction) + samples[high] * fraction
+        }
+        return result
     }
 }
 
@@ -122,6 +244,41 @@ enum WavFile {
         return payload.withUnsafeBytes { raw in
             raw.bindMemory(to: Int16.self).map { Float($0) / 32768.0 }
         }
+    }
+
+    /// Writes mono 16-bit PCM, which is what `afplay`/`afinfo` and the debug
+    /// harness expect.
+    static func write(_ samples: [Float], sampleRate: Double, to url: URL) throws {
+        let rate = UInt32(sampleRate.rounded())
+        let byteCount = samples.count * 2
+
+        var data = Data(capacity: 44 + byteCount)
+        func append(_ value: UInt32) {
+            withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+        }
+        func append16(_ value: UInt16) {
+            withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+        }
+
+        data.append(contentsOf: Data("RIFF".utf8))
+        append(UInt32(36 + byteCount))
+        data.append(contentsOf: Data("WAVE".utf8))
+        data.append(contentsOf: Data("fmt ".utf8))
+        append(16)               // fmt chunk size
+        append16(1)              // PCM
+        append16(1)              // mono
+        append(rate)
+        append(rate * 2)         // byte rate
+        append16(2)              // block align
+        append16(16)             // bits per sample
+        data.append(contentsOf: Data("data".utf8))
+        append(UInt32(byteCount))
+
+        for sample in samples {
+            let clamped = max(-1, min(1, sample))
+            append16(UInt16(bitPattern: Int16(clamped * 32767)))
+        }
+        try data.write(to: url)
     }
 }
 

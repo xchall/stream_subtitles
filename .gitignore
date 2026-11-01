@@ -5,3 +5,12 @@ DerivedData/
 xcuserdata/
 .swiftpm/
 *.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# Model files (weights, tokenizers) - not for the remote repo
+stream_subtitles/Models/
+Models/
+*.onnx
+tokens.txt
+
+# Vendored sources
+Vendor/

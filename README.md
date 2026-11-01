@@ -2,10 +2,11 @@
 
 iOS-приложение (SwiftUI, минимум iOS 26) для распознавания речи в реальном времени:
 бесконечное окно с текстом, выбор языка в правом верхнем углу (RU / EN / FR / ES) и
-кнопка включения/выключения микрофона. Пока работает только английский — для него
-в репозитории лежит модель.
+кнопка включения/выключения микрофона. Работают английский и русский — для них
+в репозитории лежат модели.
 
-Модель запускается на iPhone через **ONNX Runtime** (без Core ML).
+Распознавание идёт через **ONNX Runtime** (без Core ML), озвучка — голосами
+**Piper** (VITS), текст в фонемы переводит **espeak-ng**.
 
 ## Требования
 
@@ -35,6 +36,20 @@ iOS-приложение (SwiftUI, минимум iOS 26) для распозн�
 Текст дописывается в окно вывода по мере появления токенов, так что задержка —
 порядка 100–150 мс после произнесения.
 
+### Озвучка (TTS)
+
+Piper-голоса — это VITS-графы, которые принимают не текст, а **IPA-фонемы**
+(`phoneme_id_map` в `.onnx.json`). На Windows/Linux `piper.exe` несёт внутри
+espeak-ng; здесь он собран для iOS (`Vendor/espeak/espeakng.xcframework`) и
+вызывается через `EspeakBridge` → `EspeakPhonemizer`. Голос берётся из поля
+`espeak.voice` конфига (`en-us`, `ru`).
+
+`StreamingSpeaker` озвучивает только «закоммиченные» слова: слово считается
+готовым, когда распознаватель поставил после него пробел и начал следующее.
+Слова копятся в батчи по 5 и синтезируются одной фразой — иначе каждое слово
+получало бы свою интонацию и звучало как отдельные обрывки. Остаток
+выговаривается по `finish()` (остановка микрофона / смена языка).
+
 ### Файлы
 
 | Файл | Назначение |
@@ -44,8 +59,12 @@ iOS-приложение (SwiftUI, минимум iOS 26) для распозн�
 | `stream_subtitles/AudioInput.swift` | захват микрофона и ресемплинг в 16 кГц |
 | `stream_subtitles/Fbank.swift` | kaldi-совместимые признаки |
 | `stream_subtitles/StreamingRNNT.swift` | потоковый RNN-T декодер на ONNX Runtime |
+| `stream_subtitles/PiperTTS.swift` | VITS-синтез: фонемы → ids → wav |
+| `stream_subtitles/EspeakPhonemizer.swift` | espeak-ng → IPA |
+| `stream_subtitles/EspeakBridge.c` | C-обёртка над espeak-ng |
+| `stream_subtitles/StreamingSpeaker.swift` | батчи по 5 слов и очередь озвучки |
 | `stream_subtitles/AppLanguage.swift` | список языков (EN / RU / FR / ES) |
-| `stream_subtitles/SelfTest.swift` | debug-режим проверки на wav-файле |
+| `stream_subtitles/SelfTest.swift` | debug-режим проверки на wav-файле и TTS |
 
 ## Модель
 

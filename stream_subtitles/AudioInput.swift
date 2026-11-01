@@ -2,8 +2,13 @@ import AVFoundation
 import Foundation
 
 /// Captures the microphone and delivers 16 kHz mono float32 samples.
+///
+/// It uses the shared `AudioEngineHub` instead of its own `AVAudioEngine`: iOS
+/// has one system voice-processing I/O unit, and a second engine made playback
+/// fail with `kAudioUnitErr_InvalidPropertyValue` (-10851) while the microphone
+/// was running. One engine, one `.playAndRecord` session, both directions.
 final class AudioInput {
-    private let engine = AVAudioEngine()
+    private let hub = AudioEngineHub.shared
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                              sampleRate: 16000,
                                              channels: 1,
@@ -27,11 +32,11 @@ final class AudioInput {
     func start() throws {
         guard !running else { return }
 
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [.allowBluetooth])
-        try session.setActive(true, options: [])
+        // `.record` would forbid playback on the same session, so the shared
+        // configuration (`.playAndRecord` + `.voiceChat`) is used for both.
+        try AudioSessionConfig.activate()
 
-        let input = engine.inputNode
+        let input = hub.engine.inputNode
         let hardwareFormat = input.inputFormat(forBus: 0)
         guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 else {
             throw NSError(domain: "AudioInput", code: 1,
@@ -50,18 +55,17 @@ final class AudioInput {
             }
         }
 
-        engine.prepare()
-        try engine.start()
+        try hub.startInputIfNeeded()
         running = true
     }
 
     func stop() {
         guard running else { return }
         running = false
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        hub.engine.inputNode.removeTap(onBus: 0)
         converter = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        // The shared engine is left running: the voice may still be speaking
+        // the tail of the transcript.
     }
 
     // MARK: - Conversion

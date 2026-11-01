@@ -23,9 +23,24 @@ final class StreamingEngine: ObservableObject {
     @Published private(set) var language: AppLanguage = .english
     @Published private(set) var permissionDenied: Bool = false
 
+    /// True while the voice is switched on in the toolbar.
+    @Published private(set) var isSpeechEnabled = true
+    /// True while synthesised audio is still being played.
+    @Published private(set) var isSpeaking = false
+
     private let queue = DispatchQueue(label: "com.dobriy.streamsubtitles.inference", qos: .userInitiated)
     private let audio = AudioInput()
     private var recognizer: StreamingRecognizer?
+    private let speaker = StreamingSpeaker()
+
+    init() {
+        speaker.onSpeakingChanged = { [weak self] speaking in
+            self?.isSpeaking = speaking
+        }
+        speaker.onError = { message in
+            NSLog("TTS: %@", message)
+        }
+    }
 
     /// Incremented on every model load request; read on the main thread.
     private var loadGeneration = 0
@@ -46,6 +61,7 @@ final class StreamingEngine: ObservableObject {
 
         guard language.hasModel else {
             state = .ready
+            speaker.prepare(for: language)
             queue.async { [weak self] in
                 self?.unloadRecognizer()
             }
@@ -68,6 +84,7 @@ final class StreamingEngine: ObservableObject {
                     DispatchQueue.main.async {
                         guard let self, self.loadGeneration == token else { return }
                         self.transcript = text
+                        self.speaker.accept(text)
                     }
                 }
                 self.recognizer = recognizer
@@ -75,6 +92,9 @@ final class StreamingEngine: ObservableObject {
                 DispatchQueue.main.async {
                     guard self.loadGeneration == token else { return }
                     self.state = .ready
+                    // Load the matching Piper voice in the background, so the
+                    // first spoken word does not wait for the ONNX session.
+                    self.speaker.prepare(for: language)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -99,6 +119,18 @@ final class StreamingEngine: ObservableObject {
         self.language = language
         transcript = ""
         loadModel(for: language)
+    }
+
+    // MARK: - Voice
+
+    /// Toolbar speaker button: mutes/unmutes the spoken translation.
+    func toggleSpeech() {
+        setSpeechEnabled(!isSpeechEnabled)
+    }
+
+    func setSpeechEnabled(_ enabled: Bool) {
+        isSpeechEnabled = enabled
+        speaker.setEnabled(enabled)
     }
 
     // MARK: - Microphone
@@ -141,8 +173,13 @@ final class StreamingEngine: ObservableObject {
         audio.stop()
         audio.onSamples = nil
         isListening = false
-        // Flush the last ~0.5 s of audio that is still sitting in the window buffer.
-        queue.async { self.recognizer?.flush(tailSeconds: 0.5) }
+        // Flush the last ~0.5 s of audio that is still sitting in the window
+        // buffer, then speak the tail word that was not committed yet.
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.recognizer?.flush(tailSeconds: 0.5)
+            DispatchQueue.main.async { self.speaker.finish() }
+        }
     }
 }
 

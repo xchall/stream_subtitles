@@ -18,18 +18,51 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    voiceButton
                     languageMenu
                 }
             }
         }
         .tint(.white)
         .preferredColorScheme(.dark)
-        .onAppear { if !SelfTest.isRequested { engine.load() } }
-        .task { await SelfTest.runIfRequested() }
+        .onAppear { if !isSelfTestRun { engine.load() } }
+        .task {
+            #if DEBUG
+            await SelfTest.runIfRequested()
+            #endif
+        }
         .onChange(of: engine.isListening) { _, listening in
             pulse = listening
         }
+    }
+
+    private var isSelfTestRun: Bool {
+        #if DEBUG
+        return SelfTest.isRequested || SelfTest.isTTSRequested
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - Voice toggle (top right)
+
+    private var voiceButton: some View {
+        Button(action: engine.toggleSpeech) {
+            Image(systemName: voiceSymbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(engine.isSpeechEnabled ? .white : .white.opacity(0.4))
+                .symbolEffect(.variableColor.iterative, isActive: engine.isSpeaking)
+                .frame(width: 38, height: 30)
+                .background(.white.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(engine.isSpeechEnabled ? "Выключить озвучку" : "Включить озвучку")
+    }
+
+    private var voiceSymbol: String {
+        guard engine.isSpeechEnabled else { return "speaker.slash.fill" }
+        return engine.isSpeaking ? "speaker.wave.3.fill" : "speaker.wave.2.fill"
     }
 
     // MARK: - Infinite transcript
